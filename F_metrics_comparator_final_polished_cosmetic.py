@@ -1,19 +1,16 @@
-
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinterdnd2 import DND_FILES, TkinterDnD
-import os
+import streamlit as st
 import pandas as pd
-import math
+import os
+import tempfile
 import xlsxwriter
 from collections import defaultdict
+from io import BytesIO
 
-original_files = []
-reduced_files = []
+st.set_page_config(page_title="Metrics Comparator", layout="centered")
+st.title("📊 Metrics Comparator 2.0 (Streamlit Edition)")
 
-def base_name(path):
-    filename = os.path.basename(path)
-    return filename.replace("_Reduced TM", "").replace("_Metrics.xlsx", "").replace(".xlsx", "").strip()
+def base_name(name):
+    return name.replace("_Reduced TM", "").replace("_Metrics.xlsx", "").replace(".xlsx", "").strip()
 
 def extract_header_and_table(df):
     start_row = None
@@ -35,41 +32,45 @@ def extract_header_and_table(df):
     table = table[~table['Initial'].isin(['Initial', 'Metric'])]
     return table
 
-def process_all_and_save():
-    if not original_files or not reduced_files:
-        messagebox.showerror("Missing Files", "Please drop both original and reduced TM files.")
-        return
+st.subheader("Step 1: Upload Excel Files")
+uploaded_files = st.file_uploader("Upload multiple _Metrics.xlsx and _Reduced TM_Metrics.xlsx files", type="xlsx", accept_multiple_files=True)
 
+if uploaded_files:
     paired = {}
-    for path in original_files:
-        name = base_name(path)
-        paired[name] = {'original': path, 'reduced': None}
-    for path in reduced_files:
-        name = base_name(path)
-        if name in paired:
-            paired[name]['reduced'] = path
+    original_files = {}
+    reduced_files = {}
 
-    output_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
-    if not output_path:
-        return
+    for f in uploaded_files:
+        name = base_name(f.name)
+        if "_reduced tm_metrics" in f.name.lower():
+            reduced_files[name] = f
+        elif "_metrics" in f.name.lower() and "reduced tm" not in f.name.lower():
+            original_files[name] = f
 
-    workbook = xlsxwriter.Workbook(output_path)
-    worksheet = workbook.add_worksheet()
-    row_cursor = 0
+    for name in set(original_files.keys()) & set(reduced_files.keys()):
+        paired[name] = {
+            'original': original_files[name],
+            'reduced': reduced_files[name]
+        }
 
-    header_format = workbook.add_format({'bold': True, 'font_color': 'black'})
-    title_format = workbook.add_format({'bold': True, 'font_color': 'red'})
-    center_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1})
-    left_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1})
-    bold_format = workbook.add_format({'bold': True, 'border': 1})
-    red_bold = workbook.add_format({'bold': True, 'font_color': 'red'})
-    regular = workbook.add_format({'font_color': 'black'})
-    header_bg = workbook.add_format({'bold': True, 'bg_color': '#D9D9D9', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
+    if st.button("🛠️ Generate Comparison Report"):
+        output = BytesIO()
+        workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+        worksheet = workbook.add_worksheet()
+        row_cursor = 0
 
-    delta_summary = {}
+        header_format = workbook.add_format({'bold': True, 'font_color': 'black'})
+        title_format = workbook.add_format({'bold': True, 'font_color': 'red'})
+        center_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'border': 1})
+        left_format = workbook.add_format({'align': 'left', 'valign': 'vcenter', 'border': 1})
+        bold_format = workbook.add_format({'bold': True, 'border': 1})
+        red_bold = workbook.add_format({'bold': True, 'font_color': 'red'})
+        regular = workbook.add_format({'font_color': 'black'})
+        header_bg = workbook.add_format({'bold': True, 'bg_color': '#D9D9D9', 'align': 'center', 'valign': 'vcenter', 'border': 1, 'text_wrap': True})
 
-    for name, files in paired.items():
-        if files['original'] and files['reduced']:
+        delta_summary = {}
+
+        for name, files in paired.items():
             df1 = pd.read_excel(files['original'], header=None)
             df2 = pd.read_excel(files['reduced'], header=None)
             t1 = extract_header_and_table(df1)
@@ -79,12 +80,12 @@ def process_all_and_save():
             worksheet.merge_range(row_cursor, 8, row_cursor, 14, "", center_format)
             worksheet.write_rich_string(row_cursor, 0,
                 red_bold, "File Name 1: ",
-                regular, os.path.basename(files['original']).replace(".xlsx", ""),
+                regular, files['original'].name.replace(".xlsx", ""),
                 red_bold, " Original Project",
                 center_format)
             worksheet.write_rich_string(row_cursor, 8,
                 red_bold, "File Name 2: ",
-                regular, os.path.basename(files['reduced']).replace(".xlsx", ""),
+                regular, files['reduced'].name.replace(".xlsx", ""),
                 red_bold, " New Project",
                 center_format)
             row_cursor += 1
@@ -95,24 +96,11 @@ def process_all_and_save():
                 worksheet.write(row_cursor, idx+8, h, header_bg)
                 worksheet.write(row_cursor, idx+16, h + " Δ" if idx > 0 else "Metric", header_bg)
             worksheet.set_row(row_cursor, 30)
-            worksheet.set_column(1, 1, 11)  # Segments
-            worksheet.set_column(2, 2, 11)  # Words
-            worksheet.set_column(3, 3, 10)  # Word %
-            worksheet.set_column(4, 4, 13)  # Characters
-            worksheet.set_column(5, 5, 15)  # Characters %
-            worksheet.set_column(6, 6, 24)  # Characters excluding spaces
-            worksheet.set_column(9, 9, 11)  # Segments
-            worksheet.set_column(10, 10, 11)  # Words
-            worksheet.set_column(11, 11, 10)  # Word %
-            worksheet.set_column(12, 12, 13)  # Characters
-            worksheet.set_column(13, 13, 15)  # Characters %
-            worksheet.set_column(14, 14, 24)  # Characters excluding spaces
-            worksheet.set_column(17, 17, 11)  # Segments Δ
-            worksheet.set_column(18, 18, 11)  # Words Δ
-            worksheet.set_column(19, 19, 10)  # Word % Δ
-            worksheet.set_column(20, 20, 13)  # Characters Δ
-            worksheet.set_column(21, 21, 15)  # Characters % Δ
-            worksheet.set_column(22, 22, 24)  # Characters excluding spaces Δ
+            worksheet.set_column(0, 0, 28)
+            worksheet.set_column(8, 8, 28)
+            worksheet.set_column(16, 16, 28)
+            worksheet.set_column(7, 7, 3)
+            worksheet.set_column(15, 15, 3)
             row_cursor += 1
 
             merged = pd.merge(t1, t2, on="Initial", how="inner")
@@ -132,15 +120,9 @@ def process_all_and_save():
                         worksheet.write(row_cursor, j+16, metric, val1_fmt)
                     else:
                         try:
-                            # If the values are the same, use the value instead of 0
                             if val1 == val2:
                                 diff = float(val1)
-                                fmt = workbook.add_format({
-                                    "align": "center",
-                                    "valign": "vcenter",
-                                    "border": 1,
-                                    "font_color": "black"
-                                })
+                                fmt = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1, "font_color": "black"})
                                 worksheet.write(row_cursor, j+16, str(int(diff)), fmt)
                             else:
                                 diff = float(val2) - float(val1)
@@ -155,181 +137,31 @@ def process_all_and_save():
 
             row_cursor += 1
 
-    # Final combined summary
-    
-    # Final combined summary
-    if delta_summary:
-        worksheet.write(row_cursor, 0, "📊 Combined Delta Summary", red_bold)
-        row_cursor += 1
-        summary_headers = ["Metric", "Segments Δ", "Words Δ", "Word % Δ", "Characters Δ", "Characters % Δ", "Characters excluding spaces Δ"]
-        for j, h in enumerate(summary_headers):
-            worksheet.write(row_cursor, j, h, header_bg)
-        worksheet.set_row(row_cursor, 30)
-        row_cursor += 1
-        for metric in delta_summary:
-            is_total_count = metric.strip().lower() == "total count"
-            row_format = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1, "font_color": "black"}) if is_total_count else (bold_format if metric in ["Translation memory matching", "Internal matching"] else left_format)
-            worksheet.write(row_cursor, 0, metric, row_format)
-            for j in range(1, len(summary_headers)):
-                total = delta_summary[metric].get(j, 0)
-                if is_total_count:
-                    fmt = workbook.add_format({
-                        "align": "center",
-                        "valign": "vcenter",
-                        "border": 1,
-                        "font_color": "black"
-                    })
-                    worksheet.write(row_cursor, j, str(int(total)), fmt)
-                else:
-                    fmt = workbook.add_format({
-                        "align": "center", "valign": "vcenter", "border": 1,
-                        "font_color": "green" if total > 0 else "red" if total < 0 else "black"
-                    })
-                    worksheet.write(row_cursor, j, f"+{int(total)}" if total > 0 else str(int(total)), fmt)
+        if delta_summary:
+            worksheet.write(row_cursor, 0, "📊 Combined Delta Summary", red_bold)
             row_cursor += 1
+            summary_headers = ["Metric", "Segments Δ", "Words Δ", "Word % Δ", "Characters Δ", "Characters % Δ", "Characters excluding spaces Δ"]
+            for j, h in enumerate(summary_headers):
+                worksheet.write(row_cursor, j, h, header_bg)
+            worksheet.set_row(row_cursor, 30)
+            row_cursor += 1
+            for metric in delta_summary:
+                is_total_count = metric.strip().lower() == "total count"
+                row_format = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1, "font_color": "black"}) if is_total_count else (bold_format if metric in ["Translation memory matching", "Internal matching"] else left_format)
+                worksheet.write(row_cursor, 0, metric, row_format)
+                for j in range(1, len(summary_headers)):
+                    total = delta_summary[metric].get(j, 0)
+                    if is_total_count:
+                        fmt = workbook.add_format({"align": "center", "valign": "vcenter", "border": 1, "font_color": "black"})
+                        worksheet.write(row_cursor, j, str(int(total)), fmt)
+                    else:
+                        fmt = workbook.add_format({
+                            "align": "center", "valign": "vcenter", "border": 1,
+                            "font_color": "green" if total > 0 else "red" if total < 0 else "black"
+                        })
+                        worksheet.write(row_cursor, j, f"+{int(total)}" if total > 0 else str(int(total)), fmt)
+                row_cursor += 1
 
-    workbook.close()
-    messagebox.showinfo("✅ Done", f"Comparison report saved:{output_path}")
-
-def handle_drop(event, target_list, label):
-    paths = root.tk.splitlist(event.data)
-    target_list.clear()
-    label_text = []
-    for p in paths:
-        if p.endswith(".xlsx"):
-            target_list.append(p)
-            label_text.append(os.path.basename(p))
-    label.config(text="\n".join(label_text) if label_text else "Drop .xlsx files here")
-    if len(label_text) > 6:
-        label.config(height=20)
-    else:
-        label.config(height=8)
-
-def browse_files(target_list, label):
-    files = filedialog.askopenfilenames(filetypes=[("Excel files", "*.xlsx")])
-    for file in files:
-        target_list.append(file)
-    label_text = [os.path.basename(f) for f in target_list]
-    label.config(text="\n".join(label_text) if label_text else "Drop .xlsx files here")
-    if len(label_text) > 6:
-        label.config(height=20)
-    else:
-        label.config(height=8)
-
-def remove_files(target_list, label):
-    target_list.clear()
-
-def load_all_files():
-    folder_selected = filedialog.askdirectory()
-    if not folder_selected:
-        return
-    original_files.clear()
-    reduced_files.clear()
-    original_label_text = []
-    reduced_label_text = []
-    for file in os.listdir(folder_selected):
-        full_path = os.path.join(folder_selected, file)
-        if not file.lower().endswith(".xlsx"):
-            continue
-        if "_reduced tm_metrics" in file.lower():
-            reduced_files.append(full_path)
-            reduced_label_text.append(file)
-        elif "_metrics" in file.lower() and "reduced tm" not in file.lower():
-            original_files.append(full_path)
-            original_label_text.append(file)
-    original_label.config(text="\n".join(original_label_text) if original_label_text else "Drop .xlsx files here")
-    reduced_label.config(text="\n".join(reduced_label_text) if reduced_label_text else "Drop .xlsx files here")
-    original_label.config(height=20 if len(original_label_text) > 6 else 8)
-    reduced_label.config(height=20 if len(reduced_label_text) > 6 else 8)
-
-
-root = TkinterDnD.Tk()
-root.title("Metrics Comparator 2.0")
-root.geometry("850x600")
-root.configure(bg="#F9F9F9")
-
-tk.Label(root, text="Original Project Files", font=("Segoe UI", 12, "bold"), bg="#F9F9F9").pack(pady=(10, 0))
-original_label = tk.Label(root, text="Drop .xlsx files here", relief="solid", width=80, height=8, bg="white", anchor="nw", justify="left")
-original_label.pack(pady=5)
-original_label.drop_target_register(DND_FILES)
-original_label.dnd_bind("<<Drop>>", lambda e: handle_drop(e, original_files, original_label))
-
-browse_original_btn = tk.Button(root, text="Browse", bg="#4CAF50", fg="white", command=lambda: browse_files(original_files, original_label))
-browse_original_btn.pack(pady=5)
-
-remove_original_btn = tk.Button(root, text="Remove", bg="red", fg="white", command=lambda: remove_files(original_files, original_label))
-remove_original_btn.pack(pady=5)
-
-tk.Label(root, text="Reduced TM Project Files", font=("Segoe UI", 12, "bold"), bg="#F9F9F9").pack(pady=(15, 0))
-reduced_label = tk.Label(root, text="Drop .xlsx files here", relief="solid", width=80, height=8, bg="white", anchor="nw", justify="left")
-reduced_label.pack(pady=5)
-reduced_label.drop_target_register(DND_FILES)
-reduced_label.dnd_bind("<<Drop>>", lambda e: handle_drop(e, reduced_files, reduced_label))
-
-browse_reduced_btn = tk.Button(root, text="Browse", bg="#4CAF50", fg="white", command=lambda: browse_files(reduced_files, reduced_label))
-browse_reduced_btn.pack(pady=5)
-
-remove_reduced_btn = tk.Button(root, text="Remove", bg="red", fg="white", command=lambda: remove_files(reduced_files, reduced_label))
-remove_reduced_btn.pack(pady=5)
-
-frame = tk.Frame(root, bg="#F9F9F9")
-frame.pack(pady=20)
-
-load_all_btn = tk.Button(frame, text="📂 Load All", command=load_all_files, bg="#2196F3", fg="white", font=("Segoe UI", 10, "bold"), height=2, width=15)
-load_all_btn.pack(side="left", padx=10)
-
-def load_all_files():
-    folder_selected = filedialog.askdirectory()
-    if not folder_selected:
-        return
-    original_files.clear()
-    reduced_files.clear()
-    original_label_text = []
-    reduced_label_text = []
-    for file in os.listdir(folder_selected):
-        full_path = os.path.join(folder_selected, file)
-        if not file.lower().endswith(".xlsx"):
-            continue
-        if "_reduced tm_metrics" in file.lower():
-            reduced_files.append(full_path)
-            reduced_label_text.append(file)
-        elif "_metrics" in file.lower() and "reduced tm" not in file.lower():
-            original_files.append(full_path)
-            original_label_text.append(file)
-    original_label.config(text="\n".join(original_label_text) if original_label_text else "Drop .xlsx files here")
-    reduced_label.config(text="\n".join(reduced_label_text) if reduced_label_text else "Drop .xlsx files here")
-    original_label.config(height=20 if len(original_label_text) > 6 else 8)
-    reduced_label.config(height=20 if len(reduced_label_text) > 6 else 8)
-
-compare_btn = tk.Button(frame, text="Compare All and Export Report", command=process_all_and_save, bg="#4CAF50", fg="white", font=("Segoe UI", 11, "bold"), height=2, width=30)
-compare_btn.pack(side="left", padx=10)
-
-
-def load_all_files():
-    folder_selected = filedialog.askdirectory()
-    if not folder_selected:
-        return
-    original_files.clear()
-    reduced_files.clear()
-    original_label_text = []
-    reduced_label_text = []
-
-    for file in os.listdir(folder_selected):
-        full_path = os.path.join(folder_selected, file)
-        if not file.lower().endswith(".xlsx"):
-            continue
-        if "_reduced tm_metrics" in file.lower():
-            reduced_files.append(full_path)
-            reduced_label_text.append(file)
-        elif "_metrics" in file.lower() and "reduced tm" not in file.lower():
-            original_files.append(full_path)
-            original_label_text.append(file)
-
-    original_label.config(text="\n".join(original_label_text) if original_label_text else "Drop .xlsx files here")
-    reduced_label.config(text="\n".join(reduced_label_text) if reduced_label_text else "Drop .xlsx files here")
-
-    original_label.config(height=20 if len(original_label_text) > 6 else 8)
-    reduced_label.config(height=20 if len(reduced_label_text) > 6 else 8)
-
-
-root.mainloop()
+        workbook.close()
+        st.success("✅ Report generated!")
+        st.download_button("📥 Download Excel Report", data=output.getvalue(), file_name="comparison_report.xlsx")
